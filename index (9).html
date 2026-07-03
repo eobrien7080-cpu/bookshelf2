@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Shelfd — your virtual library</title>
+<link rel="stylesheet" href="styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+</head>
+<body>
+
+<!-- ============ SIGN IN ============ -->
+<section id="signin">
+  <div class="book-mark">📚</div>
+  <h1>Shelf<em>d</em></h1>
+  <p>Scan it. Shelve it. Rate it.<br>Sign in with your email to open your shelf.</p>
+  <div class="signin-card">
+    <label for="nameInput">Your name</label>
+    <input type="text" id="nameInput" placeholder="Eben" autocomplete="name">
+    <label for="emailInput">Email</label>
+    <input type="text" id="emailInput" placeholder="you@example.com" autocomplete="email" inputmode="email"
+      onkeydown="if(event.key==='Enter')signIn()">
+    <button class="btn" onclick="signIn()">Open my shelf</button>
+    <div class="status" id="signinStatus"></div>
+  </div>
+  <div class="profiles" id="profileList"></div>
+</section>
+
+<!-- ============ APP ============ -->
+<div id="app" style="display:none">
+<header>
+  <div class="header-inner">
+    <div>
+      <div class="logo">Shelf<em>d</em><span class="emblem" id="themeEmblem"></span></div>
+      <div class="tagline">Scan it. Shelve it. Rate it.</div>
+    </div>
+    <div class="whoami">
+      <div class="avatar" id="avatar">?</div>
+      <div>
+        <div id="whoName" style="color:var(--ink);font-weight:600"></div>
+        <button class="link-btn" onclick="signOut()">Switch account</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<nav>
+  <div class="nav-inner">
+    <button class="tab active" data-view="library" onclick="showView('library')">Library</button>
+    <button class="tab" data-view="wishlist" onclick="showView('wishlist')">Wishlist</button>
+    <button class="tab" data-view="add" onclick="showView('add')">+ Add</button>
+    <button class="tab" data-view="recs" onclick="showView('recs')">For you</button>
+    <button class="tab" data-view="profile" onclick="showView('profile')">Profile</button>
+    <button class="tab" data-view="settings" onclick="showView('settings')">Settings</button>
+  </div>
+</nav>
+
+<main>
+
+  <!-- ============ LIBRARY ============ -->
+  <section id="view-library" class="view active">
+    <div class="shelf-stats" id="shelfStats"></div>
+    <div class="toolbar">
+      <input type="text" class="search-input" id="searchInput" placeholder="Search your shelf…" oninput="renderLibrary()">
+      <select id="groupSelect" onchange="renderLibrary()">
+        <option value="genre" selected>Genre shelves</option>
+        <option value="series">Series shelves</option>
+        <option value="author">Author shelves</option>
+        <option value="none">No grouping</option>
+      </select>
+      <select id="ownFilter" onchange="renderLibrary()">
+        <option value="all">Owned + borrowed</option>
+        <option value="own">Owned only</option>
+        <option value="borrow">Borrowed only</option>
+      </select>
+      <select id="sortSelect" onchange="renderLibrary()">
+        <option value="added">Recently added</option>
+        <option value="rating">Highest rated</option>
+        <option value="genre">Genre A–Z</option>
+        <option value="title">Title A–Z</option>
+        <option value="author">Author A–Z</option>
+      </select>
+    </div>
+    <div id="libraryGrid"></div>
+    <div id="libraryEmpty" class="empty" style="display:none">
+      <div class="big">📖</div>
+      <p><strong>Your shelf is empty.</strong></p>
+      <p style="margin-top:6px">Hit <b>+ Add</b> and scan the barcode on the back of any book.</p>
+    </div>
+  </section>
+
+  <!-- ============ WISHLIST ============ -->
+  <section id="view-wishlist" class="view">
+    <h2>Wishlist</h2>
+    <p class="sub">Books you want. Tap one for the blurb and a link to buy it.</p>
+    <div id="wishlistGrid" class="grid"></div>
+    <div id="wishlistEmpty" class="empty" style="display:none">
+      <div class="big">🔐</div>
+      <p><strong>Nothing on your wishlist yet.</strong></p>
+      <p style="margin-top:6px">When adding a book, pick <b>Wishlist</b> instead of Own — it'll land here.</p>
+    </div>
+  </section>
+
+  <!-- ============ ADD ============ -->
+  <section id="view-add" class="view">
+    <h2>Add a book</h2>
+    <p class="sub">Point your camera at the barcode on the back cover, or type the ISBN / title below.</p>
+
+    <div class="panel">
+      <div class="row" style="justify-content:center">
+        <button class="btn" id="scanBtn" onclick="toggleScanner()">📷 Start scanning</button>
+      </div>
+      <div id="reader"></div>
+      <p class="scan-hint" id="scanHint"></p>
+    </div>
+
+    <div class="panel">
+      <span class="field-label" style="margin-top:0">Or enter it manually</span>
+      <div class="row">
+        <input type="text" id="isbnInput" placeholder="ISBN or title + author" onkeydown="if(event.key==='Enter')lookupManual()">
+        <button class="btn ghost" onclick="lookupManual()">Look up</button>
+      </div>
+      <div class="status" id="lookupStatus"></div>
+    </div>
+
+    <div class="panel" id="previewPanel" style="display:none">
+      <div class="detail" id="previewDetail"></div>
+      <span class="field-label">How do you have it?</span>
+      <div class="chips" id="statusChips">
+        <button class="chip on" data-s="own" onclick="pickStatus('own')">✓ I own it</button>
+        <button class="chip" data-s="borrow" onclick="pickStatus('borrow')">↩ Borrowed</button>
+        <button class="chip" data-s="wishlist" onclick="pickStatus('wishlist')">🔐 Wishlist</button>
+      </div>
+      <div class="row" style="margin-top:18px">
+        <button class="btn" onclick="addPreviewToLibrary()">Add it</button>
+        <button class="btn ghost" onclick="clearPreview()">Cancel</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ RECS ============ -->
+  <section id="view-recs" class="view">
+    <h2>Recommended for you</h2>
+    <p class="sub">Built from your Top 5 and anything you rated 4.5 stars or higher. Refresh again and it rotates to another of your favorite genres.</p>
+    <button class="btn" id="recBtn" onclick="getRecommendations()">✢ Get recommendations</button>
+    <div id="recStatus" class="status"></div>
+    <div class="panel" style="margin-top:18px">
+      <div class="field-label" style="margin-top:0">Library snapshot</div>
+      <div id="recSummaryContent"></div>
+    </div>
+    <div id="recList" style="margin-top:18px"></div>
+  </section>
+
+  <!-- ============ PROFILE ============ -->
+  <section id="view-profile" class="view">
+    <div class="profile-head">
+      <div class="avatar big" id="profileAvatar">?</div>
+      <div>
+        <div class="pname" id="profileName"></div>
+        <div class="pmail" id="profileMail"></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <span class="field-label" style="margin-top:0">Pick your avatar</span>
+      <div class="avatar-picker" id="avatarPicker"></div>
+      <div class="avatar-hint" id="avatarHint"></div>
+    </div>
+
+    <div class="panel">
+      <span class="field-label" style="margin-top:0">My top 5</span>
+      <p class="sub" style="margin:0 0 12px">Tap a slot to pick a book from your shelf. This is what friends see first.</p>
+      <div class="top5-row" id="top5Row"></div>
+    </div>
+
+    <div class="panel">
+      <span class="field-label" style="margin-top:0">Friends</span>
+      <p class="sub" style="margin:0 0 12px">Send your friend link — when someone opens it, you show up in their friends list and they can browse your shelf and top 5. It's a snapshot, so send a fresh link when your shelf changes.</p>
+      <div class="row">
+        <button class="btn" onclick="copyFriendLink()">🔗 Copy my friend link</button>
+        <span class="status" id="friendLinkStatus" style="margin-top:0"></span>
+      </div>
+      <div id="friendsList" style="margin-top:16px"></div>
+    </div>
+
+    <div class="panel">
+      <span class="field-label" style="margin-top:0">Share your shelf as text</span>
+      <div class="share-card" id="shareCard" style="box-shadow:none"></div>
+      <pre class="share-text" id="shareText"></pre>
+      <button class="btn ghost" onclick="copyShare()">Copy to clipboard</button>
+      <span class="status" id="copyStatus" style="display:inline-block;margin-left:10px"></span>
+    </div>
+  </section>
+
+  <!-- ============ SETTINGS ============ -->
+  <section id="view-settings" class="view">
+    <h2>Settings</h2>
+    <p class="sub">Pick a color, or step into the library.</p>
+
+    <div class="toggle-row">
+      <div>
+        <div class="tl">Dark mode</div>
+        <div class="ts">Flips your current theme to its night version.</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="darkToggle" onchange="setDark(this.checked)" aria-label="Dark mode">
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <span class="field-label" style="margin-top:0">Theme</span>
+    <div class="theme-grid" id="themeGrid"></div>
+  </section>
+
+</main>
+</div>
+
+<div class="modal-bg" id="modalBg" onclick="if(event.target===this)closeModal()">
+  <div class="modal" id="modalContent"></div>
+</div>
+<div id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
