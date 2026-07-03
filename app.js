@@ -602,13 +602,26 @@ function normalizeIsbn(input) {
 async function lookupISBN(isbn) {
   setStatus('scanHint', `Found barcode ${isbn}. Looking it up...`, '');
   try {
-    const response = await fetch(`https://openlibrary.org/isbn/${isbn}.json`);
-    if (!response.ok) {
+    // The edition endpoint has the exact edition title/subtitle, but it does NOT
+    // include author names or a usable cover id. The search endpoint has both.
+    // Fetch both and merge them so scanned books get a real author and cover.
+    const [edition, doc] = await Promise.all([
+      fetch(`https://openlibrary.org/isbn/${isbn}.json`)
+        .then(res => (res.ok ? res.json() : {}))
+        .catch(() => ({})),
+      fetch(`https://openlibrary.org/search.json?q=isbn:${isbn}&limit=1`)
+        .then(res => (res.ok ? res.json() : null))
+        .then(data => (data && Array.isArray(data.docs) ? data.docs[0] : null))
+        .catch(() => null)
+    ]);
+
+    if (!edition.title && !doc) {
       return searchOpenLibrary(isbn);
     }
-    const raw = await response.json();
-    const edition = await fetch(`https://openlibrary.org${raw.key}.json`).then(res => res.json()).catch(() => raw);
-    const book = mapOpenLibraryResult({ ...raw, ...edition, isbn });
+
+    // Search doc first, then edition on top so the edition's exact title wins,
+    // while author_name / cover_i / subjects from the search doc survive.
+    const book = mapOpenLibraryResult({ ...(doc || {}), ...edition, isbn });
     showPreview(book);
     setStatus('lookupStatus', '', '');
   } catch (error) {
@@ -745,11 +758,18 @@ async function enrichBookOnline(bookId) {
   if (!book) return;
   try {
     const params = new URLSearchParams({
-      title: book.title,
-      author: book.author && book.author !== 'Unknown author' ? book.author : '',
       fields: 'title,author_name,series,subject,first_publish_year,cover_i',
       limit: '5'
     });
+    // Search by ISBN when we have one (exact match), otherwise by title.
+    // Never send an empty author param -- it makes the search return nothing.
+    const isbn = normalizeIsbnKey(book.isbn);
+    if (isbn.length === 10 || isbn.length === 13) {
+      params.set('q', `isbn:${isbn}`);
+    } else {
+      params.set('title', book.title);
+      if (book.author && book.author !== 'Unknown author') params.set('author', book.author);
+    }
     const response = await fetch(`https://openlibrary.org/search.json?${params.toString()}`);
     if (!response.ok) return;
     const data = await response.json();
@@ -770,6 +790,15 @@ async function enrichBookOnline(bookId) {
     if (genre && live.genre !== genre) { live.genre = genre; changed = true; }
     const series = cleanSeriesName(seriesNames[0]);
     if (series && !live.series) { live.series = series; changed = true; }
+
+    // Backfill a missing author (barcode scans used to save "Unknown author").
+    if (!live.author || live.author === 'Unknown author') {
+      const authorDoc = docs.find(doc => Array.isArray(doc.author_name) && doc.author_name.length);
+      if (authorDoc) {
+        live.author = authorDoc.author_name[0];
+        changed = true;
+      }
+    }
 
     // Backfill a missing cover from the best search match.
     if (!live.cover) {
@@ -800,9 +829,11 @@ function mapOpenLibraryResult(raw) {
   // search results use cover_i, edition records (barcode scans) use a covers array.
   const coverId = raw.cover_i || (Array.isArray(raw.covers) ? raw.covers.find(id => id > 0) : null);
   const isbnDigits = String(raw.isbn || '').replace(/[^0-9Xx]/g, '');
+  // ?default=false makes the ISBN cover URL 404 when no cover exists,
+  // instead of quietly loading a blank 1x1 pixel that looks like an empty card.
   const cover = coverId ? `https://covers.openlibrary.org/b/id/${coverId}-L.jpg`
-    : raw.cover ? `https://covers.openlibrary.org/b/isbn/${raw.cover}-L.jpg`
-    : (isbnDigits.length === 10 || isbnDigits.length === 13) ? `https://covers.openlibrary.org/b/isbn/${isbnDigits}-L.jpg` : '';
+    : raw.cover ? `https://covers.openlibrary.org/b/isbn/${raw.cover}-L.jpg?default=false`
+    : (isbnDigits.length === 10 || isbnDigits.length === 13) ? `https://covers.openlibrary.org/b/isbn/${isbnDigits}-L.jpg?default=false` : '';
   const description = raw.subtitle || raw.description || raw.first_sentence || '';
   const blurbText = typeof description === 'object' ? (description.value || '') : description;
   const subjects = Array.isArray(raw.subject) ? raw.subject : Array.isArray(raw.subjects) ? raw.subjects : [];
@@ -1540,6 +1571,19 @@ function renderFriendSummary() {
   });
 }
 
+// If any cover image fails to load (bad URL, no cover on Open Library, offline),
+// swap it for the text fallback instead of leaving a broken/empty card.
+document.addEventListener('error', event => {
+  const img = event.target;
+  if (!(img instanceof HTMLImageElement)) return;
+  if (!img.closest('.cover-wrap')) return;
+  const title = (img.alt || '').replace(/ cover$/, '') || 'Untitled';
+  const fallback = document.createElement('div');
+  fallback.className = 'cover-fallback';
+  fallback.innerHTML = `<div class="t">${escapeHtml(title)}</div>`;
+  img.replaceWith(fallback);
+}, true);
+
 window.addEventListener('DOMContentLoaded', () => {
   loadProfiles();
   const current = getCurrentUser();
@@ -1550,11 +1594,13 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 });
 
-// Books saved before covers were fixed (mostly barcode scans) have no cover URL.
-// Quietly look them up one at a time so the shelf fills in on its own.
+// Books saved before covers were fixed (mostly barcode scans) have no cover URL
+// and/or no author. Quietly look them up one at a time so the shelf fills in.
 function backfillMissingCovers() {
   if (!state.user) return;
-  const missing = state.user.books.filter(book => !book.cover);
+  const missing = state.user.books.filter(book =>
+    !book.cover || !book.author || book.author === 'Unknown author'
+  );
   missing.forEach((book, index) => {
     setTimeout(() => enrichBookOnline(book.id), index * 800);
   });
