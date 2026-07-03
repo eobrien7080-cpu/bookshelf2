@@ -747,7 +747,7 @@ async function enrichBookOnline(bookId) {
     const params = new URLSearchParams({
       title: book.title,
       author: book.author && book.author !== 'Unknown author' ? book.author : '',
-      fields: 'title,author_name,series,subject,first_publish_year',
+      fields: 'title,author_name,series,subject,first_publish_year,cover_i',
       limit: '5'
     });
     const response = await fetch(`https://openlibrary.org/search.json?${params.toString()}`);
@@ -771,6 +771,15 @@ async function enrichBookOnline(bookId) {
     const series = cleanSeriesName(seriesNames[0]);
     if (series && !live.series) { live.series = series; changed = true; }
 
+    // Backfill a missing cover from the best search match.
+    if (!live.cover) {
+      const coverDoc = docs.find(doc => doc.cover_i);
+      if (coverDoc) {
+        live.cover = `https://covers.openlibrary.org/b/id/${coverDoc.cover_i}-L.jpg`;
+        changed = true;
+      }
+    }
+
     if (changed) {
       saveCurrentUser();
       renderLibrary();
@@ -787,7 +796,13 @@ function mapOpenLibraryResult(raw) {
   const series = cleanSeriesName(extractSeries(raw));
   const genre = extractGenre(raw);
   const isbn = raw.isbn || raw.key || '';
-  const cover = raw.cover_i ? `https://covers.openlibrary.org/b/id/${raw.cover_i}-L.jpg` : raw.cover ? `https://covers.openlibrary.org/b/isbn/${raw.cover}-L.jpg` : '';
+  // Covers come back in different shapes depending on the endpoint:
+  // search results use cover_i, edition records (barcode scans) use a covers array.
+  const coverId = raw.cover_i || (Array.isArray(raw.covers) ? raw.covers.find(id => id > 0) : null);
+  const isbnDigits = String(raw.isbn || '').replace(/[^0-9Xx]/g, '');
+  const cover = coverId ? `https://covers.openlibrary.org/b/id/${coverId}-L.jpg`
+    : raw.cover ? `https://covers.openlibrary.org/b/isbn/${raw.cover}-L.jpg`
+    : (isbnDigits.length === 10 || isbnDigits.length === 13) ? `https://covers.openlibrary.org/b/isbn/${isbnDigits}-L.jpg` : '';
   const description = raw.subtitle || raw.description || raw.first_sentence || '';
   const blurbText = typeof description === 'object' ? (description.value || '') : description;
   const subjects = Array.isArray(raw.subject) ? raw.subject : Array.isArray(raw.subjects) ? raw.subjects : [];
@@ -1531,8 +1546,19 @@ window.addEventListener('DOMContentLoaded', () => {
   if (current) {
     state.user = current;
     showApp();
+    backfillMissingCovers();
   }
 });
+
+// Books saved before covers were fixed (mostly barcode scans) have no cover URL.
+// Quietly look them up one at a time so the shelf fills in on its own.
+function backfillMissingCovers() {
+  if (!state.user) return;
+  const missing = state.user.books.filter(book => !book.cover);
+  missing.forEach((book, index) => {
+    setTimeout(() => enrichBookOnline(book.id), index * 800);
+  });
+}
 
 window.updateBookStatus = updateBookStatus;
 window.setBookRating = setBookRating;
